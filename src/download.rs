@@ -81,12 +81,16 @@ async fn do_download(
     tracing::info!("Downloading: {} -> {}", video.title, output_template);
 
     let mut child = Command::new(&config.ytdlp_path)
+        .env("PYTHONIOENCODING", "utf-8")
         .args([
             "-x",
             "--audio-format",
             &config.audio_format,
             "--audio-quality",
             &config.audio_quality,
+            "--embed-metadata",
+            "--parse-metadata",
+            "title:%(artist)s - %(title)s",
             "--extractor-args",
             "youtube:player_client=web,default",
             "--newline",       // 每个进度更新单独一行

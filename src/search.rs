@@ -40,6 +40,7 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
     tracing::debug!("YouTube Music URL: {}", search_url);
 
     let output = Command::new(&config.ytdlp_path)
+        .env("PYTHONIOENCODING", "utf-8")
         .args([
             &search_url,
             "--dump-json",
@@ -78,7 +79,47 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
         }
     }
 
-    Ok(results)
+    // 针对每个 YouTube Music 搜索结果，并发查询其 Track 和 Artist 信息
+    let mut futures = Vec::new();
+    for mut info in results {
+        let ytdlp_path = config.ytdlp_path.clone();
+        let handle = tokio::spawn(async move {
+            if let Some(url) = &info.webpage_url {
+                let out = Command::new(&ytdlp_path)
+                    .env("PYTHONIOENCODING", "utf-8")
+                    .args(["--print", "track,artist", url])
+                    .output()
+                    .await;
+                if let Ok(output) = out {
+                    if output.status.success() {
+                        let text = String::from_utf8_lossy(&output.stdout);
+                        let lines: Vec<&str> = text.lines().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                        tracing::debug!("yt-dlp --print output for {}: {:?}", url, lines);
+                        if lines.len() >= 2 {
+                            let track = lines[0];
+                            let artist_raw = lines[1];
+                            if track != "NA" && artist_raw != "NA" {
+                                let artist = artist_raw.split(',').next().unwrap_or(artist_raw).trim();
+                                info.title = format!("{} - {}", artist, track);
+                                tracing::info!("Updated title to: {}", info.title);
+                            }
+                        }
+                    }
+                }
+            }
+            info
+        });
+        futures.push(handle);
+    }
+
+    let mut enriched_results = Vec::new();
+    for handle in futures {
+        if let Ok(info) = handle.await {
+            enriched_results.push(info);
+        }
+    }
+
+    Ok(enriched_results)
 }
 
 /// 普通 YouTube 搜索：使用 ytsearch{N}: 前缀
@@ -86,6 +127,7 @@ async fn run_yt_search(query: &str, max_results: usize, config: &Config) -> Resu
     let search_query = format!("ytsearch{}:{}", max_results, query);
 
     let output = Command::new(&config.ytdlp_path)
+        .env("PYTHONIOENCODING", "utf-8")
         .args([
             &search_query,
             "--dump-json",
@@ -115,7 +157,8 @@ async fn run_yt_search(query: &str, max_results: usize, config: &Config) -> Resu
         }
         match serde_json::from_str::<Value>(line) {
             Ok(json) => {
-                if let Some(info) = parse_video_info(&json) {
+                if let Some(mut info) = parse_video_info(&json) {
+                    info.media_type = Some("audio".to_string());
                     results.push(info);
                 }
             }
