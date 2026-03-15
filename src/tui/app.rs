@@ -133,12 +133,14 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
                     // Search input
                     KeyCode::Char(c) if app.focus == Focus::Search => {
                         app.query_input.insert(app.cursor_pos, c);
-                        app.cursor_pos += 1;
+                        app.cursor_pos += c.len_utf8();
                     }
                     KeyCode::Backspace if app.focus == Focus::Search => {
                         if app.cursor_pos > 0 {
-                            app.cursor_pos -= 1;
-                            app.query_input.remove(app.cursor_pos);
+                            if let Some(c) = app.query_input[..app.cursor_pos].chars().last() {
+                                app.cursor_pos -= c.len_utf8();
+                                app.query_input.remove(app.cursor_pos);
+                            }
                         }
                     }
                     KeyCode::Enter if app.focus == Focus::Search => {

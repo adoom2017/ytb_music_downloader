@@ -161,18 +161,30 @@ fn render_results(f: &mut Frame, app: &TuiApp, area: Rect) {
                 None => "--:--".into(),
             };
             let channel = v.channel.as_deref().unwrap_or("").chars().take(20).collect::<String>();
+            
+            let size_str = v.filesize_approx.map(|s| format!("{:.1}MB", s as f64 / 1048576.0)).unwrap_or_else(|| "未知大小".into());
+            let date_str = v.upload_date.as_deref().unwrap_or("未知日期");
+            let media_type_str = match v.media_type.as_deref() {
+                Some("audio") => "🎵音频",
+                Some("video") => "🎬视频",
+                Some("video+audio") => "🎬+🎵音视频",
+                _ => "未知类型",
+            };
 
             let line1 = Line::from(vec![
                 Span::styled(selected_marker, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(
-                    truncate(&v.title, 42),
+                    truncate(&v.title, 60),
                     Style::default().fg(Color::White).add_modifier(if i == app.result_selected { Modifier::BOLD } else { Modifier::empty() }),
                 ),
             ]);
             let line2 = Line::from(vec![
                 Span::raw("   "),
-                Span::styled(format!("⏱{} ", duration), Style::default().fg(MUTED)),
-                Span::styled(channel, Style::default().fg(MUTED)),
+                Span::styled(format!("⏱ {}  ", duration), Style::default().fg(MUTED)),
+                Span::styled(format!("👤 {}  ", channel), Style::default().fg(MUTED)),
+                Span::styled(format!("💾 {}  ", size_str), Style::default().fg(Color::Rgb(14, 165, 233))), // Sky blue
+                Span::styled(format!("📅 {}  ", date_str), Style::default().fg(MUTED)),
+                Span::styled(format!("[{}]", media_type_str), Style::default().fg(ACCENT2)),
             ]);
             ListItem::new(vec![line1, line2])
         })

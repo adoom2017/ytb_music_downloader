@@ -133,7 +133,12 @@ fn parse_video_info(json: &Value) -> Option<VideoInfo> {
     let id = json["id"].as_str().unwrap_or("").to_string();
     let title = json["title"].as_str().unwrap_or("Unknown Title").to_string();
 
-    if id.is_empty() || title == "[Deleted video]" || title == "[Private video]" {
+    if id.is_empty() 
+        || title.is_empty()
+        || title == "Unknown Title" 
+        || title == "[Deleted video]" 
+        || title == "[Private video]" 
+    {
         return None;
     }
 

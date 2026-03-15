@@ -13,7 +13,7 @@ use tracing_subscriber::{
 // 导出重载句柄类型，供 Web API 和 TUI 使用
 pub type LogReloadHandle = reload::Handle<EnvFilter, Registry>;
 
-pub fn init_logger(config: &Config) -> Result<LogReloadHandle> {
+pub fn init_logger(config: &Config, is_tui: bool) -> Result<LogReloadHandle> {
     // 1. 确保日志目录存在并清理过期日志
     fs::create_dir_all(&config.log_dir).context("Failed to create log directory")?;
     cleanup_old_logs(config);
@@ -26,9 +26,11 @@ pub fn init_logger(config: &Config) -> Result<LogReloadHandle> {
     let (filter_layer, reload_handle) = reload::Layer::new(filter);
 
     // 4. 创建控制台输出层
-    let console_layer = fmt::layer()
-        .compact()
-        .with_target(false);
+    let console_layer = if is_tui {
+        None
+    } else {
+        Some(fmt::layer().compact().with_target(false))
+    };
 
     // 5. 创建按天滚动的日志文件层
     let file_appender = tracing_appender::rolling::daily(&config.log_dir, "app.log");

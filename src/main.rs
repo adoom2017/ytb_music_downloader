@@ -41,7 +41,8 @@ async fn main() -> Result<()> {
     config.ensure_download_dir()?;
 
     // 初始化日志并获取动态修改级别的句柄
-    let log_handle = logger::init_logger(&config)?;
+    let is_tui = !matches!(cli.command, Some(Commands::Web { .. }));
+    let log_handle = logger::init_logger(&config, is_tui)?;
 
     let shared = new_shared_state(log_handle, config.log_level.clone());
 
