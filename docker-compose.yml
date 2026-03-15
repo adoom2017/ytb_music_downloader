@@ -1,0 +1,16 @@
+services:
+  ytb-music-downloader:
+    build: .
+    container_name: ytb-music-downloader
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+    environment:
+      - PORT=3000
+      - LOG_LEVEL=info
+      - LOG_KEEP_DAYS=7
+      - DOWNLOAD_DIR=/app/downloads
+      - LOG_DIR=/app/logs
+    restart: unless-stopped

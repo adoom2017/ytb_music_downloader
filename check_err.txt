@@ -1,0 +1,4 @@
+    Checking ytb-music-downloader v0.1.0 (E:\app_workspace\ytb_music_downloader)
+src\state.rs:102:7: error: cannot find attribute `serde` in this scope
+src\logger.rs:59:56: error[E0069]: `return;` in a function whose return type is not `()`: return type is not `()`
+error: could not compile `ytb-music-downloader` (bin "ytb-music-downloader") due to 2 previous errors
