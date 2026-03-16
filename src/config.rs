@@ -47,7 +47,7 @@ impl Default for Config {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
             ytdlp_path: std::env::var("YTDLP_PATH").unwrap_or_else(|_| "yt-dlp".to_string()),
-            log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
+            log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_string()),
             log_dir: std::env::var("LOG_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| {

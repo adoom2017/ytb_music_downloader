@@ -121,8 +121,18 @@ async fn do_download(
         .spawn()
         .context("Failed to spawn yt-dlp process")?;
 
+    let stdout = child.stdout.take().expect("stdout should be piped");
     let stderr = child.stderr.take().expect("stderr should be piped");
-    let mut reader = BufReader::new(stderr).lines();
+
+    // 异步处理 stderr 输出，防止缓冲区占满导致进程挂起
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            tracing::warn!("yt-dlp stderr: {}", line);
+        }
+    });
+
+    let mut reader = BufReader::new(stdout).lines();
 
     let mut downloaded_file: Option<String> = None;
 
@@ -139,8 +149,12 @@ async fn do_download(
             );
         }
 
-        // 检测转换阶段
-        if line.contains("[ExtractAudio]") || line.contains("Destination:") && line.contains(".mp3") {
+        // 检测转换阶段或后处理阶段
+        if line.contains("[ExtractAudio]") 
+            || line.contains("[Metadata]") 
+            || line.contains("[Fixup")
+            || (line.contains("Destination:") && line.contains(".mp3")) 
+        {
             let mut app = state.lock().await;
             app.update_download_status(task_id, DownloadStatus::Converting);
         }
