@@ -64,6 +64,21 @@ async fn download_with_retry(
     Err(last_err)
 }
 
+/// 清理文件名中的非法字符
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 async fn do_download(
     task_id: &str,
     video: &VideoInfo,
@@ -72,9 +87,11 @@ async fn do_download(
 ) -> Result<String> {
     config.ensure_download_dir()?;
 
+    // 使用搜索结果中的 title 作为文件名（已经是 "artist - track" 格式）
+    let safe_title = sanitize_filename(&video.title);
     let output_template = config
         .download_dir
-        .join("%(title)s.%(ext)s")
+        .join(format!("{}.%(ext)s", safe_title))
         .to_string_lossy()
         .to_string();
 
@@ -83,14 +100,14 @@ async fn do_download(
     let mut child = Command::new(&config.ytdlp_path)
         .env("PYTHONIOENCODING", "utf-8")
         .args([
+            "--encoding", "utf-8",
+            "--no-check-certificate",
             "-x",
             "--audio-format",
             &config.audio_format,
             "--audio-quality",
             &config.audio_quality,
             "--embed-metadata",
-            "--parse-metadata",
-            "title:%(artist)s - %(title)s",
             "--extractor-args",
             "youtube:player_client=web,default",
             "--newline",       // 每个进度更新单独一行
@@ -113,7 +130,7 @@ async fn do_download(
     while let Ok(Some(line)) = reader.next_line().await {
         tracing::debug!("yt-dlp: {}", line);
 
-        // 解析进度：[download]  57.3% of   5.23MiB ...
+        // 解析进度：[download]  57.3% of ...
         if let Some(progress) = parse_progress(&line) {
             let mut app = state.lock().await;
             app.update_download_status(

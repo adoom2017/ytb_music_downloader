@@ -42,6 +42,8 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
     let output = Command::new(&config.ytdlp_path)
         .env("PYTHONIOENCODING", "utf-8")
         .args([
+            "--encoding", "utf-8",
+            "--no-check-certificate",
             &search_url,
             "--dump-json",
             "--flat-playlist",
@@ -87,23 +89,44 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
             if let Some(url) = &info.webpage_url {
                 let out = Command::new(&ytdlp_path)
                     .env("PYTHONIOENCODING", "utf-8")
-                    .args(["--print", "track,artist", url])
+                    .args([
+                        "--encoding", "utf-8",
+                        "--no-check-certificate",
+                        "--quiet",
+                        "--print", "%(track)s,%(artist)s",
+                        url,
+                    ])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
                     .output()
                     .await;
-                if let Ok(output) = out {
-                    if output.status.success() {
-                        let text = String::from_utf8_lossy(&output.stdout);
-                        let lines: Vec<&str> = text.lines().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-                        tracing::debug!("yt-dlp --print output for {}: {:?}", url, lines);
-                        if lines.len() >= 2 {
-                            let track = lines[0];
-                            let artist_raw = lines[1];
-                            if track != "NA" && artist_raw != "NA" {
-                                let artist = artist_raw.split(',').next().unwrap_or(artist_raw).trim();
-                                info.title = format!("{} - {}", artist, track);
-                                tracing::info!("Updated title to: {}", info.title);
+
+                match out {
+                    Ok(output) => {
+                        if output.status.success() {
+                            let text = String::from_utf8_lossy(&output.stdout);
+                            let text = text.trim();
+                            tracing::debug!("yt-dlp --print output for {}: {}", url, text);
+
+                            if !text.is_empty() && text != "NA,NA" && !text.contains("ERROR") {
+                                // 格式: "track,artist"
+                                let parts: Vec<&str> = text.split(',').collect();
+                                if parts.len() >= 2 {
+                                    let track = parts[0].trim();
+                                    let artist = parts[1].trim();
+                                    if track != "NA" && artist != "NA" && !track.is_empty() && !artist.is_empty() {
+                                        info.title = format!("{} - {}", artist, track);
+                                        tracing::info!("Updated title to: {}", info.title);
+                                    }
+                                }
                             }
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            tracing::warn!("yt-dlp --print failed for {}: {}", url, stderr);
                         }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to run yt-dlp --print for {}: {}", url, e);
                     }
                 }
             }
@@ -114,8 +137,9 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
 
     let mut enriched_results = Vec::new();
     for handle in futures {
-        if let Ok(info) = handle.await {
-            enriched_results.push(info);
+        match handle.await {
+            Ok(info) => enriched_results.push(info),
+            Err(e) => tracing::warn!("Task join error: {}", e),
         }
     }
 
@@ -129,6 +153,8 @@ async fn run_yt_search(query: &str, max_results: usize, config: &Config) -> Resu
     let output = Command::new(&config.ytdlp_path)
         .env("PYTHONIOENCODING", "utf-8")
         .args([
+            "--encoding", "utf-8",
+            "--no-check-certificate",
             &search_query,
             "--dump-json",
             "--flat-playlist",
@@ -176,11 +202,11 @@ fn parse_video_info(json: &Value) -> Option<VideoInfo> {
     let id = json["id"].as_str().unwrap_or("").to_string();
     let title = json["title"].as_str().unwrap_or("Unknown Title").to_string();
 
-    if id.is_empty() 
+    if id.is_empty()
         || title.is_empty()
-        || title == "Unknown Title" 
-        || title == "[Deleted video]" 
-        || title == "[Private video]" 
+        || title == "Unknown Title"
+        || title == "[Deleted video]"
+        || title == "[Private video]"
     {
         return None;
     }
