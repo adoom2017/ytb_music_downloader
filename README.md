@@ -62,6 +62,8 @@ cargo run -- web --port 8080  # 自定义端口
 |------|--------|------|
 | `DOWNLOAD_DIR` | `./downloads` | 下载保存目录 |
 | `PORT` | `3000` | Web 服务端口 |
+| `BIND_HOST` | `127.0.0.1` | Web 服务监听地址 |
+| `ALLOWED_ORIGINS` | 空 | 允许跨域访问的来源，多个用逗号分隔 |
 | `YTDLP_PATH` | `yt-dlp` | yt-dlp 可执行文件路径 |
 
 ## Web API

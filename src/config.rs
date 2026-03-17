@@ -15,6 +15,10 @@ pub struct Config {
     pub audio_quality: String,
     /// Web 服务器端口
     pub web_port: u16,
+    /// Web 服务器监听地址
+    pub bind_host: String,
+    /// 显式允许的跨域来源，空列表表示不启用 CORS
+    pub allowed_origins: Vec<String>,
     /// yt-dlp 可执行文件路径
     pub ytdlp_path: String,
     /// 日志级别 (trace, debug, info, warn, error)
@@ -36,6 +40,18 @@ impl Default for Config {
                 p
             });
 
+        let allowed_origins = std::env::var("ALLOWED_ORIGINS")
+            .ok()
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         Config {
             download_dir,
             concurrent_downloads: 2,
@@ -46,6 +62,8 @@ impl Default for Config {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
+            bind_host: std::env::var("BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string()),
+            allowed_origins,
             ytdlp_path: std::env::var("YTDLP_PATH").unwrap_or_else(|_| "yt-dlp".to_string()),
             log_level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "debug".to_string()),
             log_dir: std::env::var("LOG_DIR")

@@ -2,13 +2,7 @@ use crate::config::Config;
 use anyhow::{Context, Result};
 use std::fs;
 use std::time::{Duration, SystemTime};
-use tracing_subscriber::{
-    EnvFilter,
-    fmt,
-    prelude::*,
-    reload,
-    Registry,
-};
+use tracing_subscriber::{fmt, prelude::*, reload, EnvFilter, Registry};
 
 // 导出重载句柄类型，供 Web API 和 TUI 使用
 pub type LogReloadHandle = reload::Handle<EnvFilter, Registry>;
@@ -55,7 +49,9 @@ fn cleanup_old_logs(config: &Config) {
     let keep_duration = Duration::from_secs(config.log_keep_days as u64 * 24 * 3600);
     let now = SystemTime::now();
 
-    let Ok(entries) = fs::read_dir(&config.log_dir) else { return };
+    let Ok(entries) = fs::read_dir(&config.log_dir) else {
+        return;
+    };
 
     for entry in entries.flatten() {
         let meta = match entry.metadata() {

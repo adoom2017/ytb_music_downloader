@@ -5,8 +5,14 @@ use serde_json::Value;
 use std::process::Stdio;
 use tokio::process::Command;
 
+const TRACK_ARTIST_SEPARATOR: &str = "\u{1f}";
+
 /// 搜索策略：优先 YouTube Music（music.youtube.com/search），无结果时回退到普通 YouTube 搜索
-pub async fn search_youtube(query: &str, max_results: usize, config: &Config) -> Result<Vec<VideoInfo>> {
+pub async fn search_youtube(
+    query: &str,
+    max_results: usize,
+    config: &Config,
+) -> Result<Vec<VideoInfo>> {
     // ── 第一步：YouTube Music 搜索 ──────────────────────────────────
     // 使用 music.youtube.com/search?q=... URL，yt-dlp 的 YouTubeMusic 提取器原生支持
     tracing::info!("Searching YouTube Music for: {}", query);
@@ -19,7 +25,10 @@ pub async fn search_youtube(query: &str, max_results: usize, config: &Config) ->
             tracing::warn!("YouTube Music returned 0 results, falling back to YouTube...");
         }
         Err(e) => {
-            tracing::warn!("YouTube Music search failed ({}), falling back to YouTube...", e);
+            tracing::warn!(
+                "YouTube Music search failed ({}), falling back to YouTube...",
+                e
+            );
         }
     }
 
@@ -32,7 +41,11 @@ pub async fn search_youtube(query: &str, max_results: usize, config: &Config) ->
 
 /// YouTube Music 搜索：使用 music.youtube.com/search?q=... URL
 /// yt-dlp 通过其 YouTubeMusic 提取器原生解析此页面
-async fn run_music_search(query: &str, max_results: usize, config: &Config) -> Result<Vec<VideoInfo>> {
+async fn run_music_search(
+    query: &str,
+    max_results: usize,
+    config: &Config,
+) -> Result<Vec<VideoInfo>> {
     let encoded = urlencoding::encode(query);
     // 加 &sp=EgWKAQIIAWoKEAoQAxAEEAkQBQ%3D%3D 过滤出 Songs 类型 (可选)
     let search_url = format!("https://music.youtube.com/search?q={}", encoded);
@@ -42,13 +55,15 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
     let output = Command::new(&config.ytdlp_path)
         .env("PYTHONIOENCODING", "utf-8")
         .args([
-            "--encoding", "utf-8",
+            "--encoding",
+            "utf-8",
             "--no-check-certificate",
             &search_url,
             "--dump-json",
             "--flat-playlist",
             "--no-download",
-            "--playlist-end", &max_results.to_string(),
+            "--playlist-end",
+            &max_results.to_string(),
             "--quiet",
         ])
         .stdout(Stdio::piped())
@@ -59,7 +74,10 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("yt-dlp YouTube Music search failed: {}", stderr));
+        return Err(anyhow::anyhow!(
+            "yt-dlp YouTube Music search failed: {}",
+            stderr
+        ));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -67,16 +85,18 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
 
     for line in stdout.lines() {
         let line = line.trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         if let Ok(json) = serde_json::from_str::<Value>(line) {
             if let Some(mut info) = parse_video_info(&json) {
                 // 将 webpage_url 设为 music.youtube.com 格式
-                info.webpage_url = Some(format!(
-                    "https://music.youtube.com/watch?v={}", info.id
-                ));
+                info.webpage_url = Some(format!("https://music.youtube.com/watch?v={}", info.id));
                 info.media_type = Some("audio".to_string());
                 results.push(info);
-                if results.len() >= max_results { break; }
+                if results.len() >= max_results {
+                    break;
+                }
             }
         }
     }
@@ -90,10 +110,12 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
                 let out = Command::new(&ytdlp_path)
                     .env("PYTHONIOENCODING", "utf-8")
                     .args([
-                        "--encoding", "utf-8",
+                        "--encoding",
+                        "utf-8",
                         "--no-check-certificate",
                         "--quiet",
-                        "--print", "%(track)s,%(artist)s",
+                        "--print",
+                        "%(track)s\u{1f}%(artist)s",
                         url,
                     ])
                     .stdout(Stdio::piped())
@@ -108,17 +130,11 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
                             let text = text.trim();
                             tracing::debug!("yt-dlp --print output for {}: {}", url, text);
 
-                            if !text.is_empty() && text != "NA,NA" && !text.contains("ERROR") {
-                                // 格式: "track,artist"
-                                let parts: Vec<&str> = text.split(',').collect();
-                                if parts.len() >= 2 {
-                                    let track = parts[0].trim();
-                                    let artist = parts[1].trim();
-                                    if track != "NA" && artist != "NA" && !track.is_empty() && !artist.is_empty() {
-                                        info.title = format!("{} - {}", artist, track);
-                                        tracing::info!("Updated title to: {}", info.title);
-                                    }
-                                }
+                            if let Some((track, artist)) = parse_track_artist_output(text) {
+                                info.title = format!("{} - {}", artist, track);
+                                tracing::info!("Updated title to: {}", info.title);
+                            } else if !text.is_empty() && !text.contains("ERROR") {
+                                tracing::debug!("Track/artist metadata unavailable for {}", url);
                             }
                         } else {
                             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -146,6 +162,25 @@ async fn run_music_search(query: &str, max_results: usize, config: &Config) -> R
     Ok(enriched_results)
 }
 
+fn parse_track_artist_output(output: &str) -> Option<(String, String)> {
+    let trimmed = output.trim();
+    if trimmed.is_empty()
+        || trimmed == format!("NA{TRACK_ARTIST_SEPARATOR}NA")
+        || trimmed.contains("ERROR")
+    {
+        return None;
+    }
+
+    let (track, artist) = trimmed.split_once(TRACK_ARTIST_SEPARATOR)?;
+    let track = track.trim();
+    let artist = artist.trim();
+    if track.is_empty() || artist.is_empty() || track == "NA" || artist == "NA" {
+        return None;
+    }
+
+    Some((track.to_string(), artist.to_string()))
+}
+
 /// 普通 YouTube 搜索：使用 ytsearch{N}: 前缀
 async fn run_yt_search(query: &str, max_results: usize, config: &Config) -> Result<Vec<VideoInfo>> {
     let search_query = format!("ytsearch{}:{}", max_results, query);
@@ -153,7 +188,8 @@ async fn run_yt_search(query: &str, max_results: usize, config: &Config) -> Resu
     let output = Command::new(&config.ytdlp_path)
         .env("PYTHONIOENCODING", "utf-8")
         .args([
-            "--encoding", "utf-8",
+            "--encoding",
+            "utf-8",
             "--no-check-certificate",
             &search_query,
             "--dump-json",
@@ -197,10 +233,12 @@ async fn run_yt_search(query: &str, max_results: usize, config: &Config) -> Resu
     Ok(results)
 }
 
-
 fn parse_video_info(json: &Value) -> Option<VideoInfo> {
     let id = json["id"].as_str().unwrap_or("").to_string();
-    let title = json["title"].as_str().unwrap_or("Unknown Title").to_string();
+    let title = json["title"]
+        .as_str()
+        .unwrap_or("Unknown Title")
+        .to_string();
 
     if id.is_empty()
         || title.is_empty()
@@ -224,22 +262,24 @@ fn parse_video_info(json: &Value) -> Option<VideoInfo> {
     let view_count = json["view_count"].as_u64();
 
     // 文件大小（字节）：优先取 filesize，再取 filesize_approx
-    let filesize_approx = json["filesize"].as_u64()
+    let filesize_approx = json["filesize"]
+        .as_u64()
         .or_else(|| json["filesize_approx"].as_u64());
 
     // 判断媒体类型：根据 vcodec / acodec
     let vcodec = json["vcodec"].as_str().unwrap_or("");
     let acodec = json["acodec"].as_str().unwrap_or("");
-    let media_type = if vcodec != "none" && !vcodec.is_empty() && acodec != "none" && !acodec.is_empty() {
-        Some("video+audio".to_string())
-    } else if vcodec != "none" && !vcodec.is_empty() {
-        Some("video".to_string())
-    } else if acodec != "none" && !acodec.is_empty() {
-        Some("audio".to_string())
-    } else {
-        // flat-playlist 模式下 codec 字段通常为空，默认为 video
-        Some("video".to_string())
-    };
+    let media_type =
+        if vcodec != "none" && !vcodec.is_empty() && acodec != "none" && !acodec.is_empty() {
+            Some("video+audio".to_string())
+        } else if vcodec != "none" && !vcodec.is_empty() {
+            Some("video".to_string())
+        } else if acodec != "none" && !acodec.is_empty() {
+            Some("audio".to_string())
+        } else {
+            // flat-playlist 模式下 codec 字段通常为空，默认为 video
+            Some("video".to_string())
+        };
 
     // 原始网页链接
     let webpage_url = json["webpage_url"]
@@ -264,4 +304,24 @@ fn parse_video_info(json: &Value) -> Option<VideoInfo> {
         webpage_url,
         upload_date,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_track_artist_output;
+
+    #[test]
+    fn parse_track_artist_output_handles_separator_safely() {
+        let parsed = parse_track_artist_output("Song, Pt. 1\u{1f}Artist, Jr.");
+        assert_eq!(
+            parsed,
+            Some(("Song, Pt. 1".to_string(), "Artist, Jr.".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_track_artist_output_rejects_missing_values() {
+        assert_eq!(parse_track_artist_output("NA\u{1f}NA"), None);
+        assert_eq!(parse_track_artist_output(""), None);
+    }
 }

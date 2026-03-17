@@ -5,11 +5,13 @@ use crate::state::{DownloadTask, SearchState, SharedState};
 use crate::tui::ui;
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -72,7 +74,7 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
         focus: Focus::Search,
         result_selected: 0,
         download_selected: 0,
-        status_message: Some("按 Enter 搜索，Tab 切换，d 下载，s 设置，q 退出".into()),
+        status_message: Some("按 Enter 搜索，Tab 切换，d 下载，s 设置，q 退出(空搜索框)".into()),
         is_searching: false,
         download_tx: tx,
         show_settings: false,
@@ -87,6 +89,9 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
+                }
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                    break;
                 }
                 match key.code {
                     // Settings panel interactions
@@ -105,7 +110,8 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
                             let mut s = app.shared.lock().await;
                             if let Some(handle) = &s.log_handle {
                                 use tracing_subscriber::filter::EnvFilter;
-                                let new_filter = EnvFilter::new(format!("ytb_music_downloader={}", level));
+                                let new_filter =
+                                    EnvFilter::new(format!("ytb_music_downloader={}", level));
                                 if handle.reload(new_filter).is_ok() {
                                     s.current_log_level = level.to_string();
                                     app.status_message = Some(format!("已切换日志级别: {}", level));
@@ -115,6 +121,11 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
                     }
                     // Global quit & panel switch
                     KeyCode::Char('q') if app.focus != Focus::Search => {
+                        break;
+                    }
+                    KeyCode::Char('q')
+                        if app.focus == Focus::Search && app.query_input.trim().is_empty() =>
+                    {
                         break;
                     }
                     KeyCode::Char('s') if app.focus != Focus::Search => {
@@ -156,6 +167,13 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
 
                             // 异步搜索，搜索完成后更新 shared state
                             tokio::spawn(async move {
+                                {
+                                    let mut s = shared.lock().await;
+                                    s.last_query = query.clone();
+                                    s.search_state = SearchState::Searching;
+                                    s.search_results.clear();
+                                }
+
                                 match search::search_youtube(&query, max, &config).await {
                                     Ok(results) => {
                                         let mut s = shared.lock().await;
@@ -165,6 +183,7 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
                                     }
                                     Err(e) => {
                                         let mut s = shared.lock().await;
+                                        s.search_results.clear();
                                         s.search_state = SearchState::Error(e.to_string());
                                     }
                                 }
@@ -179,7 +198,11 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
                         }
                     }
                     KeyCode::Down if app.focus == Focus::Results => {
-                        let count = app.shared.try_lock().map(|s| s.search_results.len()).unwrap_or(0);
+                        let count = app
+                            .shared
+                            .try_lock()
+                            .map(|s| s.search_results.len())
+                            .unwrap_or(0);
                         if app.result_selected + 1 < count {
                             app.result_selected += 1;
                         }
@@ -207,7 +230,11 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
                         }
                     }
                     KeyCode::Down if app.focus == Focus::Downloads => {
-                        let count = app.shared.try_lock().map(|s| s.downloads.len()).unwrap_or(0);
+                        let count = app
+                            .shared
+                            .try_lock()
+                            .map(|s| s.downloads.len())
+                            .unwrap_or(0);
                         if app.download_selected + 1 < count {
                             app.download_selected += 1;
                         }
@@ -223,15 +250,21 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
             match state {
                 Some(SearchState::Done) => {
                     app.is_searching = false;
-                    let count = app.shared.try_lock().map(|s| s.search_results.len()).unwrap_or(0);
-                    let q = app.shared.try_lock().map(|s| s.last_query.clone()).unwrap_or_default();
+                    let count = app
+                        .shared
+                        .try_lock()
+                        .map(|s| s.search_results.len())
+                        .unwrap_or(0);
+                    let q = app
+                        .shared
+                        .try_lock()
+                        .map(|s| s.last_query.clone())
+                        .unwrap_or_default();
                     app.status_message = Some(format!("搜索 \"{}\" 完成，共 {} 条结果", q, count));
-                    if let Ok(mut s) = app.shared.try_lock() { s.search_state = SearchState::Idle; }
                 }
                 Some(SearchState::Error(e)) => {
                     app.is_searching = false;
                     app.status_message = Some(format!("搜索失败: {}", e));
-                    if let Ok(mut s) = app.shared.try_lock() { s.search_state = SearchState::Idle; }
                 }
                 _ => {}
             }
@@ -240,7 +273,11 @@ pub async fn run_tui(config: Config, state: SharedState) -> Result<()> {
 
     // 恢复终端
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }

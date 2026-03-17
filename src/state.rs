@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
 
 /// 单条搜索结果
@@ -12,7 +12,7 @@ pub struct VideoInfo {
     pub id: String,
     pub title: String,
     pub url: String,
-    pub duration: Option<u64>,   // 秒
+    pub duration: Option<u64>, // 秒
     pub channel: Option<String>,
     pub thumbnail: Option<String>,
     pub view_count: Option<u64>,
@@ -86,7 +86,7 @@ pub enum SearchState {
 }
 
 /// 全局共享应用状态（TUI 和 Web 共用）
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AppState {
     /// 最后一次搜索的关键词
     pub last_query: String,
@@ -102,6 +102,8 @@ pub struct AppState {
     pub log_handle: Option<LogReloadHandle>,
     /// 当前启用的日志级别显示字符
     pub current_log_level: String,
+    /// 全局下载并发限制
+    pub download_limiter: Arc<Semaphore>,
 }
 
 impl Default for SearchState {
@@ -111,8 +113,17 @@ impl Default for SearchState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(concurrent_downloads: usize) -> Self {
+        Self {
+            last_query: String::new(),
+            search_state: SearchState::Idle,
+            search_results: Vec::new(),
+            downloads: HashMap::new(),
+            download_order: Vec::new(),
+            log_handle: None,
+            current_log_level: String::new(),
+            download_limiter: Arc::new(Semaphore::new(concurrent_downloads.max(1))),
+        }
     }
 
     pub fn add_download(&mut self, task: DownloadTask) -> String {
@@ -124,7 +135,10 @@ impl AppState {
 
     pub fn update_download_status(&mut self, id: &str, status: DownloadStatus) {
         if let Some(task) = self.downloads.get_mut(id) {
-            if matches!(status, DownloadStatus::Done { .. } | DownloadStatus::Failed { .. }) {
+            if matches!(
+                status,
+                DownloadStatus::Done { .. } | DownloadStatus::Failed { .. }
+            ) {
                 task.finished_at = Some(Utc::now());
             }
             task.status = status;
@@ -144,8 +158,12 @@ impl AppState {
 /// 线程安全的共享状态句柄
 pub type SharedState = Arc<Mutex<AppState>>;
 
-pub fn new_shared_state(log_handle: LogReloadHandle, initial_level: String) -> SharedState {
-    let mut state = AppState::new();
+pub fn new_shared_state(
+    log_handle: LogReloadHandle,
+    initial_level: String,
+    concurrent_downloads: usize,
+) -> SharedState {
+    let mut state = AppState::new(concurrent_downloads);
     state.log_handle = Some(log_handle);
     state.current_log_level = initial_level;
     Arc::new(Mutex::new(state))

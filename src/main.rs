@@ -44,7 +44,11 @@ async fn main() -> Result<()> {
     let is_tui = !matches!(cli.command, Some(Commands::Web { .. }));
     let log_handle = logger::init_logger(&config, is_tui)?;
 
-    let shared = new_shared_state(log_handle, config.log_level.clone());
+    let shared = new_shared_state(
+        log_handle,
+        config.log_level.clone(),
+        config.concurrent_downloads,
+    );
 
     match cli.command.unwrap_or(Commands::Tui) {
         Commands::Tui => {

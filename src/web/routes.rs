@@ -3,14 +3,13 @@ use crate::download;
 use crate::search;
 use crate::state::{DownloadTask, SharedState, VideoInfo};
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse},
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 
 /// Axum 共享上下文
 #[derive(Clone)]
@@ -74,6 +73,7 @@ pub async fn search_handler(
         let mut app = ctx.state.lock().await;
         app.last_query = req.query.clone();
         app.search_state = crate::state::SearchState::Searching;
+        app.search_results.clear();
     }
 
     match search::search_youtube(&req.query, max, &ctx.config).await {
@@ -88,6 +88,7 @@ pub async fn search_handler(
         }
         Err(e) => {
             let mut app = ctx.state.lock().await;
+            app.search_results.clear();
             app.search_state = crate::state::SearchState::Error(e.to_string());
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -104,6 +105,8 @@ pub async fn start_download_handler(
     State(ctx): State<AppContext>,
     Json(req): Json<DownloadRequest>,
 ) -> Result<Json<DownloadStarted>, (StatusCode, Json<ErrorResponse>)> {
+    validate_download_request(&req.video)?;
+
     let task = DownloadTask::new(req.video.clone());
     let task_id = task.id.clone();
     let title = req.video.title.clone();
@@ -129,8 +132,10 @@ pub async fn batch_download_handler(
     State(ctx): State<AppContext>,
     Json(req): Json<BatchDownloadRequest>,
 ) -> Result<Json<Vec<DownloadStarted>>, (StatusCode, Json<ErrorResponse>)> {
-    let max_concurrent = ctx.config.concurrent_downloads;
-    let semaphore = Arc::new(Semaphore::new(max_concurrent));
+    for video in &req.videos {
+        validate_download_request(video)?;
+    }
+
     let mut responses = Vec::new();
 
     for video in req.videos {
@@ -143,12 +148,10 @@ pub async fn batch_download_handler(
             app.add_download(task);
         }
 
-        let sem = semaphore.clone();
         let state = ctx.state.clone();
         let config = (*ctx.config).clone();
         let id = task_id.clone();
         tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
             download::download_video(id, video, config, state).await;
         });
 
@@ -191,9 +194,7 @@ pub struct LogLevelRequest {
     pub level: String,
 }
 
-pub async fn get_log_level_handler(
-    State(ctx): State<AppContext>,
-) -> Json<LogLevelResponse> {
+pub async fn get_log_level_handler(State(ctx): State<AppContext>) -> Json<LogLevelResponse> {
     let state = ctx.state.lock().await;
     Json(LogLevelResponse {
         level: state.current_log_level.clone(),
@@ -205,7 +206,7 @@ pub async fn set_log_level_handler(
     Json(req): Json<LogLevelRequest>,
 ) -> Result<Json<LogLevelResponse>, (StatusCode, String)> {
     let mut state = ctx.state.lock().await;
-    
+
     // Validate level
     let level_str = req.level.to_lowercase();
     if !["trace", "debug", "info", "warn", "error"].contains(&level_str.as_str()) {
@@ -221,4 +222,18 @@ pub async fn set_log_level_handler(
     }
 
     Ok(Json(LogLevelResponse { level: level_str }))
+}
+
+fn validate_download_request(video: &VideoInfo) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let source_url = download::download_source_url(video);
+    if download::is_allowed_media_url(source_url) {
+        return Ok(());
+    }
+
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: "Only YouTube URLs are allowed".to_string(),
+        }),
+    ))
 }
